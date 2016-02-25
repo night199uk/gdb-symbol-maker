@@ -28,7 +28,7 @@ sections = []
 symbols = []
 
 pe = pefile.PE(pefilename)
-image_base = pefile.
+image_base = pe.OPTIONAL_HEADER.ImageBase
 for section in pe.sections:
 	offset = section.VirtualAddress
 	length = section.Misc_VirtualSize
@@ -104,7 +104,7 @@ popen.wait()
 output = popen.stdout.read()
 print(output)
 
-popen = subprocess.Popen(("ld", "-arch", "x86_64", "-macosx_version_min", "10.10", "-dylib", "-image_base", "0x180000000", "-o", outputfilename, "/tmp/gdbtab.o"), stdout=subprocess.PIPE)
+popen = subprocess.Popen(("ld", "-arch", "x86_64", "-macosx_version_min", "10.10", "-dylib", "-image_base", '0x{:x}'.format(image_base), "-o", outputfilename, "/tmp/gdbtab.o"), stdout=subprocess.PIPE)
 popen.wait()
 output = popen.stdout.read()
 print(output)
