@@ -18,6 +18,7 @@ class Section(object):
 		self.length = length
 		self.name = name
 		self.kind = kind
+		self.symbols = []
 
 pefilename = sys.argv[1]
 symbolfilename = sys.argv[2]
@@ -28,10 +29,11 @@ sections = []
 symbols = []
 
 pe = pefile.PE(pefilename)
+#print(pe.dump_info())
 image_base = pe.OPTIONAL_HEADER.ImageBase
 for section in pe.sections:
 	offset = section.VirtualAddress
-	length = section.Misc_VirtualSize
+	length = section.SizeOfRawData
 	name = section.Name.strip('\x00')
 	kind = section.Characteristics
 	if section.Characteristics & pefile.SECTION_CHARACTERISTICS['IMAGE_SCN_CNT_CODE']:
@@ -70,31 +72,55 @@ for line in file.readlines():
 
 		sec = int(sec, 16)
 		sec = sections[sec - 1]
-		if sec.name == "HEADER" or sec.name == ".reloc":
-			continue
 
 		offset, = struct.unpack('>q', binascii.unhexlify(offset))
 		if offset < 0:
-			offset = sec.offset + sec.length + offset
+			offset = (sec.offset + sec.length + offset) - sec.offset
 
 		symbol = Symbol(sec, offset, name)
-		symbols.append(symbol)
+		sec.symbols.append(symbol)
 
 file.close()
 
-#sorted_sections = sorted(sections, key = lambda k: k.offset)
-#for section in sorted_sections:
-#	print("offset: 0x{0:x} length: 0x{1:x} name: {2!s} kind: {3!s}".format(section.offset, section.length, section.name, section.kind))
-
-sorted_symbols = sorted(symbols, key = lambda k: k.offset)
+for section in sections[:]:
+	print(section.name)
+	if section.name == 'HEADER' or \
+	   section.name == '.reloc' or \
+	   section.name == 'text' or \
+	   section.name == '':
+	   sections.remove(section)
 
 last_address = 0x0
 file = open("/tmp/gdbtab.s", "w")
-for symbol in sorted_symbols:
-	file.write('.space {},0x90\n'.format((symbol.sec.offset + symbol.offset) - last_address))
-	file.write('.global \"{}\"\n'.format(symbol.name))
-	file.write(' \"{}\":\n'.format(symbol.name))
-	last_address = symbol.sec.offset + symbol.offset
+
+sorted_sections = sorted(sections, key = lambda k: k.offset)
+for section in sorted_sections:
+	print("last_address: 0x{0:x}".format(last_address))
+	print("offset: 0x{0:x} length: 0x{1:x} name: {2!s} kind: {3!s}".format(section.offset, section.length, section.name, section.kind))
+	if not section.symbols:
+		continue
+
+	section_offset = section.offset - sorted_sections[0].offset
+	section_space = section_offset - last_address
+	if section_space > 0:
+		file.write('.space {},0x90\n'.format(section_space))
+
+	if section.name != ".rdata":
+		file.write('{}\n'.format(section.name))
+
+	last_address = section_offset
+
+	sorted_symbols = sorted(section.symbols, key = lambda k: k.offset)
+	for symbol in sorted_symbols:
+		symbol_offset = section_offset + symbol.offset
+		symbol_space = symbol_offset - last_address
+		print("symbol: 0x{0:x} offset: 0x{1:x} name: {2!s}".format(symbol_offset, symbol.offset, symbol.name))
+		if symbol_space > 0:
+			file.write('.space {},0x90\n'.format(symbol_space))
+		file.write('.global \"{}\"\n'.format(symbol.name))
+		file.write(' \"{}\":\n'.format(symbol.name))
+		last_address = section_offset + symbol.offset
+
 file.write('.p2align 12'.format(symbol.name))
 file.close()
 
@@ -104,10 +130,14 @@ popen.wait()
 output = popen.stdout.read()
 print(output)
 
-popen = subprocess.Popen(("ld", "-arch", "x86_64", "-macosx_version_min", "10.10", "-dylib", "-image_base", '0x{:x}'.format(image_base), "-o", outputfilename, "/tmp/gdbtab.o"), stdout=subprocess.PIPE)
+# seg1addr and image_base are the same thing
+popen = subprocess.Popen(("ld", "-arch", "x86_64", "-macosx_version_min", "10.10", "-preload", "-segalign", "0x20", "-pie", "-seg1addr", "0x240", "-image_base", '0x{:x}'.format(image_base), "-o", outputfilename, "/tmp/gdbtab.o"), stdout=subprocess.PIPE)
 popen.wait()
 output = popen.stdout.read()
 print(output)
 
+### Mac (untested)
+#popen = subprocess.Popen(("gcc", "-Wl,-image_base,0x{:x}".format(image_base), "-dynamiclib", "-o",  outputfilename, "/tmp/gdbtab.s"), stdout=subprocess.PIPE)
+
 ### Linux (untested)
-#popen = subprocess.Popen(("gcc", "-Wl,-N,-Ttext,$base", "-nostdlib", "-o",  outputfilename, "/tmp/gdbtab.s"), stdout=subprocess.PIPE)
+#popen = subprocess.Popen(("gcc", "-Wl,-N,-Ttext," + image_base, "-nostdlib", "-o",  outputfilename, "/tmp/gdbtab.s"), stdout=subprocess.PIPE)
